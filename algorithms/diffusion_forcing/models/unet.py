@@ -306,12 +306,18 @@ class Unet(nn.Module):
 
         self.final_res_block = block_klass(dim * 2, dim, emb_dim=self.emb_dim)
         self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
+        
+        self.inverse_layer = nn.Sequential(
+                nn.Linear(external_cond_emb_dim, external_cond_emb_dim),
+                nn.SiLU(),
+                nn.Linear(external_cond_emb_dim, external_cond_emb_dim),
+        )
 
     @property
     def downsample_factor(self):
         return 2 ** (len(self.downs) - 1)
 
-    def forward(self, x, time, z_cond, external_cond=None, x_self_cond=None):
+    def forward(self, x, time, z_cond, external_cond=None, x_self_cond=None, is_reverse=False):
         assert all(
             [divisible_by(d, self.downsample_factor) for d in x.shape[-2:]]
         ), f"your input dimensions {x.shape[-2:]} need to be divisible by {self.downsample_factor}, given the unet"
@@ -331,7 +337,10 @@ class Unet(nn.Module):
                 external_cond_emb = torch.zeros((emb.shape[0], self.external_cond_dim)).to(emb)
             else:
                 external_cond_emb = self.external_cond_mlp(external_cond)
-            emb = torch.cat([emb, external_cond_emb], -1)
+            if is_reverse:
+                emb = torch.cat([emb, self.inverse_layer(external_cond_emb)], -1)
+            else:
+                emb = torch.cat([emb, external_cond_emb], -1)
 
         h = []
 
@@ -392,8 +401,8 @@ class TransitionUnet(Unet):
         if num_gru_layers > 1:
             raise NotImplementedError("num_gru_layers > 1 is not implemented yet for TransitionUnet.")
 
-    def forward(self, x, t, z_cond, external_cond=None, x_self_cond=None):
-        z_next = super().forward(x, t, z_cond, external_cond, x_self_cond)
+    def forward(self, x, t, z_cond, external_cond=None, x_self_cond=None, is_reverse=False):
+        z_next = super().forward(x, t, z_cond, external_cond, x_self_cond, is_reverse=is_reverse)
         if self.num_gru_layers:
             z_next = self.gru(z_next, z_cond)
 

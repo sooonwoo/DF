@@ -42,6 +42,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
         self.validation_step_outputs = []
         self.min_crps_sum = float("inf")
         self.learnable_init_z = cfg.learnable_init_z
+        self.include_reverse = cfg.include_reverse
 
         super().__init__(cfg)
 
@@ -73,7 +74,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
             for pg in optimizer.param_groups:
                 pg["lr"] = lr_scale * self.cfg.lr
 
-    def _preprocess_batch(self, batch):
+    def _preprocess_batch(self, batch, include_reverse):
         xs = batch[0]
         batch_size, n_frames = xs.shape[:2]
 
@@ -116,7 +117,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
     def training_step(self, batch, batch_idx):
         # training step for dynamics
-        xs, conditions, masks, *_, init_z = self._preprocess_batch(batch)
+        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, self.include_reverse)
 
         n_frames, batch_size, _, *_ = xs.shape
 
@@ -130,7 +131,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 deterministic_t = 0
 
             z_next, x_next_pred, l, cum_snr = self.transition_model(
-                z, xs[t], conditions[t], deterministic_t=deterministic_t, cum_snr=cum_snr
+                z, xs[t], conditions[t], deterministic_t=deterministic_t, cum_snr=cum_snr, is_reverse=t_is_reverse[t]
             )
 
             z = z_next

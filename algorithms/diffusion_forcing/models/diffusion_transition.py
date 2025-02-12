@@ -183,6 +183,7 @@ class DiffusionTransitionModel(nn.Module):
         external_cond: Optional[torch.Tensor] = None,
         deterministic_t: Optional[Union[float, int]] = None,
         cum_snr: Optional[torch.Tensor] = None,
+        is_reverse: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         :param z: z at current time step
@@ -211,10 +212,10 @@ class DiffusionTransitionModel(nn.Module):
         x_self_cond = None
         if self.self_condition and random() < 0.5:
             with torch.no_grad():
-                x_self_cond = self.model_predictions(noised_x_next, t, z, external_cond=external_cond).pred_x_start
+                x_self_cond = self.model_predictions(noised_x_next, t, z, external_cond=external_cond, is_reverse=is_reverse).pred_x_start
                 x_self_cond.detach_()
 
-        model_pred = self.model_predictions(noised_x_next, t, z, external_cond=external_cond, x_self_cond=x_self_cond)
+        model_pred = self.model_predictions(noised_x_next, t, z, external_cond=external_cond, x_self_cond=x_self_cond, is_reverse=is_reverse)
         x_next_pred = model_pred.pred_x_start
         z_next_pred = model_pred.pred_z
 
@@ -294,8 +295,8 @@ class DiffusionTransitionModel(nn.Module):
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def model_predictions(self, x, t, z_cond, external_cond=None, x_self_cond=None):
-        z_next = self.model(x, t, z_cond, external_cond, x_self_cond)
+    def model_predictions(self, x, t, z_cond, external_cond=None, x_self_cond=None, is_reverse=False):
+        z_next = self.model(x, t, z_cond, external_cond, x_self_cond, is_reverse=is_reverse)
         model_output = self.x_from_z(z_next)
 
         if self.objective == "pred_noise":
@@ -313,8 +314,8 @@ class DiffusionTransitionModel(nn.Module):
 
         return ModelPrediction(pred_noise, x_start, z_next, model_output)
 
-    def p_mean_variance(self, x, t, z_cond, external_cond=None, x_self_cond=None):
-        model_pred = self.model_predictions(x, t, z_cond, external_cond=external_cond, x_self_cond=x_self_cond)
+    def p_mean_variance(self, x, t, z_cond, external_cond=None, x_self_cond=None, is_reverse=False):
+        model_pred = self.model_predictions(x, t, z_cond, external_cond=external_cond, x_self_cond=x_self_cond, is_reverse=is_reverse)
         x_start = model_pred.pred_x_start
         pred_z = model_pred.pred_z
 
@@ -322,11 +323,11 @@ class DiffusionTransitionModel(nn.Module):
         return model_mean, posterior_variance, posterior_log_variance, x_start, pred_z
 
     # @torch.no_grad()
-    def p_sample(self, x, t, z_cond, external_cond=None, x_self_cond=None):
+    def p_sample(self, x, t, z_cond, external_cond=None, x_self_cond=None, is_reverse=False):
         b, *_, device = *x.shape, x.device
         batched_times = torch.full((b,), t, device=x.device, dtype=torch.long)
         model_mean, _, model_log_variance, x_start, pred_z = self.p_mean_variance(
-            x, batched_times, z_cond, external_cond=external_cond, x_self_cond=x_self_cond
+            x, batched_times, z_cond, external_cond=external_cond, x_self_cond=x_self_cond, is_reverse=is_reverse
         )
         noise = torch.randn_like(x) if t > 0 else 0.0  # no noise if t == 0
         noise = torch.clamp(noise, -self.clip_noise, self.clip_noise)
@@ -334,7 +335,7 @@ class DiffusionTransitionModel(nn.Module):
         return pred_x, x_start, pred_z
 
     # @torch.no_grad()
-    def p_sample_loop(self, shape, z_cond, external_cond=None, return_all_timesteps=False):
+    def p_sample_loop(self, shape, z_cond, external_cond=None, return_all_timesteps=False, is_reverse=False):
         batch, device = shape[0], self.betas.device
 
         x = torch.randn(shape, device=device)
@@ -345,7 +346,7 @@ class DiffusionTransitionModel(nn.Module):
 
         for t in reversed(range(0, self.num_timesteps)):
             self_cond = x_start if self.self_condition else None
-            x, x_start, pred_z = self.p_sample(x, t, z_cond, external_cond, x_self_cond=self_cond)
+            x, x_start, pred_z = self.p_sample(x, t, z_cond, external_cond, x_self_cond=self_cond, is_reverse=is_reverse)
             xs.append(x)
 
         ret = x if not return_all_timesteps else xs
