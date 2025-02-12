@@ -234,7 +234,7 @@ class Unet(nn.Module):
         device = [v for v in self.init_conv.parameters()][0].device
         self.external_cond_mlp = (
             nn.Sequential(
-                nn.Linear(32, external_cond_emb_dim), # nn.Linear(external_cond_dim, external_cond_emb_dim),
+                nn.Linear(external_cond_dim, external_cond_emb_dim), # nn.Linear(external_cond_dim, external_cond_emb_dim),
                 nn.GELU(),
                 nn.Linear(external_cond_emb_dim, external_cond_emb_dim),
             )
