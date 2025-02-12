@@ -77,7 +77,23 @@ class DiffusionForcingBase(BasePytorchAlgo):
     def _preprocess_batch(self, batch, include_reverse):
         xs = batch[0]
         batch_size, n_frames = xs.shape[:2]
-
+        
+        # split xs into forward and reverse, then attach reverse xs
+        num_chunk = n_frames // self.frame_stack
+        forward_len = (num_chunk // 2 + num_chunk % 2) * self.frame_stack
+        reverse_len = (num_chunk // 2) * self.frame_stack
+        assert forward_len > reverse_len, f"forward_len and reverse_len must be different: {forward_len} vs {reverse_len}"
+        xs_forward = xs[:, :forward_len]
+        xs_reverse = xs[:, forward_len - 1 - reverse_len : forward_len - 1].flip(1)
+        xs = torch.cat([xs_forward, xs_reverse], dim=1)
+        # action 절반 붙이기 + shift
+        actions = batch[1]
+        actions_forward = actions[:, :forward_len - 1]
+        actions_reverse = actions[:, :forward_len - 1].flip(1)[:, :reverse_len]
+        batch[1] = torch.cat([actions_forward, actions_backward], dim=1)
+        t_is_reverse = torch.zeros(batch_size).to(xs.device)
+        t_is_reverse[:, forward_len:] = 1
+        
         if n_frames % self.frame_stack != 0:
             raise ValueError("Number of frames must be divisible by frame stack size")
         if self.context_frames % self.frame_stack != 0:
@@ -104,7 +120,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
             init_z = torch.zeros(batch_size, *self.z_shape)
             init_z = init_z.to(xs.device)
 
-        return xs, conditions, masks, init_z
+        return xs, conditions, masks, init_z, t_is_reverse.bool()
 
     def reweigh_loss(self, loss, weight=None):
         loss = rearrange(loss, "t b (fs c) ... -> t b fs c ...", fs=self.frame_stack)
