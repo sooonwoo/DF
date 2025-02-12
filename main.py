@@ -55,8 +55,14 @@ def run_local(cfg: DictConfig):
         if cfg_choice["algorithm"] is not None:
             cfg.algorithm._name = cfg_choice["algorithm"]
         
-        cfg["dataset"]["external_cond_dim"]=1
-        cfg["algorithm"]["external_cond_dim"]=1
+        if "dmlab" in cfg.dataset.save_dir:
+            num_action = 3
+        elif "minecraft" in cfg.dataset.save_dir:
+            num_action = 4
+        else:
+            raise NotImplementedError(f"Unknown dataset for assigning num_action: {cfg.dataset}")
+        cfg["dataset"]["external_cond_dim"]=cfg.algorithm.frame_stack * num_action
+        cfg["algorithm"]["external_cond_dim"]=cfg.algorithm.frame_stack * num_action
 
     # Set up the output directory.
     output_dir = Path(hydra_cfg.runtime.output_dir)

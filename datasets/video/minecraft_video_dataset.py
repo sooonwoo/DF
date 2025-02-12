@@ -21,33 +21,33 @@ class MinecraftVideoDataset(BaseVideoDataset):
         super().__init__(cfg, split)
 
     def download_dataset(self) -> Sequence[int]:
-        from internetarchive import download
+        # from internetarchive import download
 
-        part_suffixes = ["aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak"]
-        for part_suffix in part_suffixes:
-            identifier = f"minecraft_marsh_dataset_{part_suffix}"
-            file_name = f"minecraft.tar.part{part_suffix}"
-            download(identifier, file_name, destdir=self.save_dir, verbose=True)
+        # part_suffixes = ["aa", "ab", "ac", "ad", "ae", "af", "ag", "ah", "ai", "aj", "ak"]
+        # for part_suffix in part_suffixes:
+        #     identifier = f"minecraft_marsh_dataset_{part_suffix}"
+        #     file_name = f"minecraft.tar.part{part_suffix}"
+        #     download(identifier, file_name, destdir=self.save_dir, verbose=True)
 
-        combined_bytes = io.BytesIO()
-        for part_suffix in part_suffixes:
-            identifier = f"minecraft_marsh_dataset_{part_suffix}"
-            file_name = f"minecraft.tar.part{part_suffix}"
-            part_file = self.save_dir / identifier / file_name
-            with open(part_file, "rb") as part:
-                combined_bytes.write(part.read())
-        combined_bytes.seek(0)
-        with tarfile.open(fileobj=combined_bytes, mode="r") as combined_archive:
-            combined_archive.extractall(self.save_dir)
-        (self.save_dir / "minecraft/test").rename(self.save_dir / "validation")
-        (self.save_dir / "minecraft/train").rename(self.save_dir / "training")
-        (self.save_dir / "minecraft").rmdir()
-        for part_suffix in part_suffixes:
-            identifier = f"minecraft_marsh_dataset_{part_suffix}"
-            file_name = f"minecraft.tar.part{part_suffix}"
-            part_file = self.save_dir / identifier / file_name
-            part_file.rmdir()
-        # pass
+        # combined_bytes = io.BytesIO()
+        # for part_suffix in part_suffixes:
+        #     identifier = f"minecraft_marsh_dataset_{part_suffix}"
+        #     file_name = f"minecraft.tar.part{part_suffix}"
+        #     part_file = self.save_dir / identifier / file_name
+        #     with open(part_file, "rb") as part:
+        #         combined_bytes.write(part.read())
+        # combined_bytes.seek(0)
+        # with tarfile.open(fileobj=combined_bytes, mode="r") as combined_archive:
+        #     combined_archive.extractall(self.save_dir)
+        # (self.save_dir / "minecraft/test").rename(self.save_dir / "validation")
+        # (self.save_dir / "minecraft/train").rename(self.save_dir / "training")
+        # (self.save_dir / "minecraft").rmdir()
+        # for part_suffix in part_suffixes:
+        #     identifier = f"minecraft_marsh_dataset_{part_suffix}"
+        #     file_name = f"minecraft.tar.part{part_suffix}"
+        #     part_file = self.save_dir / identifier / file_name
+        #     part_file.rmdir()
+        pass
 
     def get_data_paths(self, split):
         data_dir = self.save_dir / split
