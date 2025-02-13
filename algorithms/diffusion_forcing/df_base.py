@@ -74,25 +74,27 @@ class DiffusionForcingBase(BasePytorchAlgo):
             for pg in optimizer.param_groups:
                 pg["lr"] = lr_scale * self.cfg.lr
 
-    def _preprocess_batch(self, batch, include_reverse):
+    def _preprocess_batch(self, batch, include_reverse = False):
         xs = batch[0]
         batch_size, n_frames = xs.shape[:2]
         
-        # split xs into forward and reverse, then attach reverse xs
-        num_chunk = n_frames // self.frame_stack
-        forward_len = (num_chunk // 2 + num_chunk % 2) * self.frame_stack
-        reverse_len = (num_chunk // 2) * self.frame_stack
-        assert forward_len > reverse_len, f"forward_len and reverse_len must be different: {forward_len} vs {reverse_len}"
-        xs_forward = xs[:, :forward_len]
-        xs_reverse = xs[:, forward_len - 1 - reverse_len : forward_len - 1].flip(1)
-        xs = torch.cat([xs_forward, xs_reverse], dim=1)
-        # action 절반 붙이기 + shift
-        actions = batch[1]
-        actions_forward = actions[:, :forward_len - 1]
-        actions_reverse = actions[:, :forward_len - 1].flip(1)[:, :reverse_len]
-        batch[1] = torch.cat([actions_forward, actions_backward], dim=1)
-        t_is_reverse = torch.zeros(batch_size).to(xs.device)
-        t_is_reverse[:, forward_len:] = 1
+        t_is_reverse = torch.zeros(batch_size, n_frames).to(xs.device)
+        if include_reverse:
+            # split xs into forward and reverse, then attach reverse xs
+            num_chunk = n_frames // self.frame_stack
+            forward_len = (num_chunk // 2 + num_chunk % 2) * self.frame_stack
+            reverse_len = (num_chunk // 2) * self.frame_stack
+            assert forward_len > reverse_len, f"forward_len and reverse_len must be different: {forward_len} vs {reverse_len}"
+            xs_forward = xs[:, :forward_len]
+            xs_reverse = xs[:, forward_len - 1 - reverse_len : forward_len - 1].flip(1)
+            xs = torch.cat([xs_forward, xs_reverse], dim=1)
+            # action 절반 붙이기 + shift
+            actions = batch[1]
+            actions_forward = actions[:, :forward_len - 1]
+            actions_reverse = actions[:, :forward_len - 1].flip(1)[:, :reverse_len+1]
+            batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).double()
+            t_is_reverse[:, forward_len:] = 1
+        t_is_reverse = rearrange(t_is_reverse, "b (t fs) -> t b fs", fs=self.frame_stack)[:, :, 0]
         
         if n_frames % self.frame_stack != 0:
             raise ValueError("Number of frames must be divisible by frame stack size")
@@ -120,7 +122,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
             init_z = torch.zeros(batch_size, *self.z_shape)
             init_z = init_z.to(xs.device)
 
-        return xs, conditions, masks, init_z, t_is_reverse.bool()
+        return xs, conditions.double(), masks, init_z, t_is_reverse.bool()
 
     def reweigh_loss(self, loss, weight=None):
         loss = rearrange(loss, "t b (fs c) ... -> t b fs c ...", fs=self.frame_stack)
@@ -133,7 +135,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
     def training_step(self, batch, batch_idx):
         # training step for dynamics
-        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, self.include_reverse)
+        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, False)
 
         n_frames, batch_size, _, *_ = xs.shape
 
@@ -175,6 +177,53 @@ class DiffusionForcingBase(BasePytorchAlgo):
             "xs_pred": self._unnormalize_x(xs_pred),
             "xs": self._unnormalize_x(xs),
         }
+        
+        # reverse
+        if self.include_reverse:
+            xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, True)
+
+            n_frames, batch_size, _, *_ = xs.shape
+
+            xs_pred = []
+            loss = []
+            z = init_z
+            cum_snr = None
+            for t in range(0, n_frames):
+                deterministic_t = None
+                if random() <= self.gt_cond_prob or (t == 0 and random() <= self.gt_first_frame):
+                    deterministic_t = 0
+
+                z_next, x_next_pred, l, cum_snr = self.transition_model(
+                    z, xs[t], conditions[t], deterministic_t=deterministic_t, cum_snr=cum_snr, is_reverse=t_is_reverse[t]
+                )
+
+                z = z_next
+                xs_pred.append(x_next_pred)
+                loss.append(l)
+
+            xs_pred = torch.stack(xs_pred)
+            loss = torch.stack(loss)
+            x_loss = self.reweigh_loss(loss, masks)
+            loss = x_loss
+
+            if batch_idx % 20 == 0:
+                self.log_dict(
+                    {
+                        "training/loss": loss,
+                        "training/x_loss": x_loss,
+                    }
+                )
+
+            xs = rearrange(xs, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
+            xs_pred = rearrange(xs_pred, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
+
+            output_dict["loss_forward"] = output_dict["loss"]
+            output_dict["loss"] = output_dict["loss"] + loss
+            output_dict.update({
+                "loss_inverse": loss,
+                "xs_pred_inverse": self._unnormalize_x(xs_pred),
+                "xs_inverse": self._unnormalize_x(xs),
+            })
 
         return output_dict
 

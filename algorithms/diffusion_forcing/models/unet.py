@@ -337,10 +337,9 @@ class Unet(nn.Module):
                 external_cond_emb = torch.zeros((emb.shape[0], self.external_cond_dim)).to(emb)
             else:
                 external_cond_emb = self.external_cond_mlp(external_cond)
-            if is_reverse:
-                emb = torch.cat([emb, self.inverse_layer(external_cond_emb)], -1)
-            else:
-                emb = torch.cat([emb, external_cond_emb], -1)
+            external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)
+            emb = torch.cat([emb, external_cond_emb], -1)
+                
 
         h = []
 
