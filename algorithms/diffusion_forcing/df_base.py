@@ -92,7 +92,8 @@ class DiffusionForcingBase(BasePytorchAlgo):
             actions = batch[1]
             actions_forward = actions[:, :forward_len - 1]
             actions_reverse = actions[:, :forward_len - 1].flip(1)[:, :reverse_len+1]
-            batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).double()
+            # batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).double()
+            batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).to(actions.dtype)
             t_is_reverse[:, forward_len:] = 1
         t_is_reverse = rearrange(t_is_reverse, "b (t fs) -> t b fs", fs=self.frame_stack)[:, :, 0]
         
@@ -122,7 +123,8 @@ class DiffusionForcingBase(BasePytorchAlgo):
             init_z = torch.zeros(batch_size, *self.z_shape)
             init_z = init_z.to(xs.device)
 
-        return xs, conditions.double(), masks, init_z, t_is_reverse.bool()
+        # return xs, conditions.double(), masks, init_z, t_is_reverse.bool()
+        return xs, conditions, masks, init_z, t_is_reverse.bool()
 
     def reweigh_loss(self, loss, weight=None):
         loss = rearrange(loss, "t b (fs c) ... -> t b fs c ...", fs=self.frame_stack)
