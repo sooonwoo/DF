@@ -312,6 +312,7 @@ class Unet(nn.Module):
                 nn.SiLU(),
                 nn.Linear(external_cond_emb_dim, external_cond_emb_dim),
         )
+        self.inverse_layer = self.inverse_layer.to(device)
 
     @property
     def downsample_factor(self):
@@ -336,8 +337,8 @@ class Unet(nn.Module):
             if external_cond is None:
                 external_cond_emb = torch.zeros((emb.shape[0], self.external_cond_dim)).to(emb)
             else:
-                external_cond_emb = self.external_cond_mlp(external_cond)
-            external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)
+                external_cond_emb = self.external_cond_mlp(external_cond.to(self.external_cond_mlp[0].weight.dtype))
+            external_cond_emb = external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)
             emb = torch.cat([emb, external_cond_emb], -1)
                 
 
