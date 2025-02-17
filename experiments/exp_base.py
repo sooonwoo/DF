@@ -162,6 +162,12 @@ class BaseLightningExperiment(BaseExperiment):
         if not self.algo:
             self.algo = self._build_algo()
 
+        if self.cfg.finetune:
+            base_model = torch.load(self.cfg.finetune)
+            missing_keys, unexpected_keys = self.algo.load_state_dict(base_model["state_dict"])
+            print(f"Missing key list: {missing_keys}")
+            print(f"Unexpected key list: {unexpected_keys}")
+
         if self.cfg.training.compile:
             self.algo = torch.compile(self.algo)
 
@@ -182,7 +188,7 @@ class BaseLightningExperiment(BaseExperiment):
             accelerator="auto",
             logger=self.logger,
             devices="auto",
-            strategy=DDPStrategy(find_unused_parameters=True) if torch.cuda.device_count() > 1 else "auto",
+            strategy=DDPStrategy(find_unused_parameters=False) if torch.cuda.device_count() > 1 else "auto",
             callbacks=callbacks,
             gradient_clip_val=self.cfg.training.optim.gradient_clip_val,
             val_check_interval=self.cfg.validation.val_every_n_step,

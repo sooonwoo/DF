@@ -22,3 +22,6 @@ validation:
 test:
   limit_batch: 1
   batch_size: 16
+
+
+finetune: "/fsx/jeremy/test.ckpt"
