@@ -12,6 +12,7 @@ uncertainty_scale: 1
 learnable_init_z: True
 optimizer_beta: [0.9, 0.99]
 include_reverse: False
+select_both_loss: True
 
 diffusion:
   objective: pred_v

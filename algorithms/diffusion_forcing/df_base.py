@@ -43,6 +43,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
         self.min_crps_sum = float("inf")
         self.learnable_init_z = cfg.learnable_init_z
         self.include_reverse = cfg.include_reverse
+        self.select_both_loss = cfg.select_both_loss
 
         super().__init__(cfg)
 
@@ -136,53 +137,11 @@ class DiffusionForcingBase(BasePytorchAlgo):
         return loss.mean()
 
     def training_step(self, batch, batch_idx):
-        # training step for dynamics
-        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, False)
-
-        n_frames, batch_size, _, *_ = xs.shape
-
-        xs_pred = []
-        loss = []
-        z = init_z
-        cum_snr = None
-        for t in range(0, n_frames):
-            deterministic_t = None
-            if random() <= self.gt_cond_prob or (t == 0 and random() <= self.gt_first_frame):
-                deterministic_t = 0
-
-            z_next, x_next_pred, l, cum_snr = self.transition_model(
-                z, xs[t], conditions[t], deterministic_t=deterministic_t, cum_snr=cum_snr, is_reverse=t_is_reverse[t]
-            )
-
-            z = z_next
-            xs_pred.append(x_next_pred)
-            loss.append(l)
-
-        xs_pred = torch.stack(xs_pred)
-        loss = torch.stack(loss)
-        x_loss = self.reweigh_loss(loss, masks)
-        loss = x_loss
-
-        if batch_idx % 20 == 0:
-            self.log_dict(
-                {
-                    "training/loss": loss,
-                    "training/x_loss": x_loss,
-                }
-            )
-
-        xs = rearrange(xs, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
-        xs_pred = rearrange(xs_pred, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
-
-        output_dict = {
-            "loss": loss,
-            "xs_pred": self._unnormalize_x(xs_pred),
-            "xs": self._unnormalize_x(xs),
-        }
-        
-        # reverse
-        if self.include_reverse:
-            xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, True)
+        rand = random() < 0.5
+        output_dict = {}
+        if (not self.include_reverse) or (self.select_both_loss) or (rand):
+            # training step for dynamics
+            xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, False)
 
             n_frames, batch_size, _, *_ = xs.shape
 
@@ -219,14 +178,64 @@ class DiffusionForcingBase(BasePytorchAlgo):
             xs = rearrange(xs, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
             xs_pred = rearrange(xs_pred, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
 
-            output_dict["loss_forward"] = output_dict["loss"]
-            output_dict["loss"] = output_dict["loss"] + loss
-            output_dict.update({
-                "loss_inverse": loss,
-                "xs_pred_inverse": self._unnormalize_x(xs_pred),
-                "xs_inverse": self._unnormalize_x(xs),
-            })
+            output_dict = {
+                "loss": loss,
+                "xs_pred": self._unnormalize_x(xs_pred),
+                "xs": self._unnormalize_x(xs),
+            }
+        
+        # reverse
+        if (self.include_reverse) and ((self.select_both_loss) or (not rand)):
+            xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, True)
 
+            n_frames, batch_size, _, *_ = xs.shape
+
+            xs_pred = []
+            loss = []
+            z = init_z
+            cum_snr = None
+            for t in range(0, n_frames):
+                deterministic_t = None
+                if random() <= self.gt_cond_prob or (t == 0 and random() <= self.gt_first_frame):
+                    deterministic_t = 0
+
+                z_next, x_next_pred, l, cum_snr = self.transition_model(
+                    z, xs[t], conditions[t], deterministic_t=deterministic_t, cum_snr=cum_snr, is_reverse=t_is_reverse[t]
+                )
+
+                z = z_next
+                xs_pred.append(x_next_pred)
+                loss.append(l)
+
+            xs_pred = torch.stack(xs_pred)
+            loss = torch.stack(loss)
+            x_loss = self.reweigh_loss(loss, masks)
+            loss = x_loss
+
+            if batch_idx % 20 == 0:
+                self.log_dict(
+                    {
+                        "training/loss": loss,
+                        "training/x_loss": x_loss,
+                    }
+                )
+
+            xs = rearrange(xs, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
+            xs_pred = rearrange(xs_pred, "t b (fs c) ... -> (t fs) b c ...", fs=self.frame_stack)
+            if self.select_both_loss:
+                output_dict["loss_forward"] = output_dict["loss"]
+                output_dict["loss"] = output_dict["loss"] + loss
+                output_dict.update({
+                    "loss_inverse": loss,
+                    "xs_pred_inverse": self._unnormalize_x(xs_pred),
+                    "xs_inverse": self._unnormalize_x(xs),
+                })
+            else:
+                output_dict = {
+                    "loss": loss,
+                    "xs_pred": self._unnormalize_x(xs_pred),
+                    "xs": self._unnormalize_x(xs),
+                }
         return output_dict
 
     @torch.no_grad()
@@ -235,7 +244,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
             # repeat batch for crps sum for time series prediction
             batch = [d[None].expand(self.calc_crps_sum, *([-1] * len(d.shape))).flatten(0, 1) for d in batch]
 
-        xs, conditions, masks, *_, init_z = self._preprocess_batch(batch)
+        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch)
 
         n_frames, batch_size, *_ = xs.shape
         xs_pred = []
@@ -244,6 +253,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
         # context
         for t in range(0, self.context_frames // self.frame_stack):
+            # print(z.shape, xs.shape, conditions.shape)
             z, x_next_pred, _, _ = self.transition_model(z, xs[t], conditions[t], deterministic_t=0)
             xs_pred.append(x_next_pred)
 
