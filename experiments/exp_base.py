@@ -164,6 +164,9 @@ class BaseLightningExperiment(BaseExperiment):
 
         if self.cfg.finetune:
             base_model = torch.load(self.cfg.finetune)
+            if self.root_cfg.algorithm.inv:
+                self.algo.state_dict()["transition_model.model.external_cond_mlp.0.weight"][:, :12] = base_model["state_dict"]["transition_model.model.external_cond_mlp.0.weight"]
+                base_model["state_dict"]["transition_model.model.external_cond_mlp.0.weight"] = self.algo.state_dict()["transition_model.model.external_cond_mlp.0.weight"]
             missing_keys, unexpected_keys = self.algo.load_state_dict(base_model["state_dict"])
             print(f"Missing key list: {missing_keys}")
             print(f"Unexpected key list: {unexpected_keys}")

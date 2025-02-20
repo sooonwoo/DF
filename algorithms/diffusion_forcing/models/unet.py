@@ -183,6 +183,7 @@ class Unet(nn.Module):
         attn_heads=4,
         full_attn=None,  # defaults to full attention only for inner most layer
         flash_attn=True,
+        inv=False,
     ):
         super().__init__()
 
@@ -314,6 +315,8 @@ class Unet(nn.Module):
         )
         self.inverse_layer = self.inverse_layer.to(device)
 
+        self.inv = inv
+
     @property
     def downsample_factor(self):
         return 2 ** (len(self.downs) - 1)
@@ -337,9 +340,20 @@ class Unet(nn.Module):
             if external_cond is None:
                 external_cond_emb = torch.zeros((emb.shape[0], self.external_cond_dim)).to(emb)
             else:
+                if self.inv:
+                    if (not isinstance(is_reverse, bool)) and is_reverse.any():
+                        external_cond # b (fs 3) -> b (fs 4)
+                        external_cond = rearrange(external_cond, "b (fs c) -> b fs c", c=3)
+                        external_cond = torch.cat([external_cond, torch.zeros_like(external_cond[:, :, :1])], dim=-1)
+                        permute_mat = torch.tensor([[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]], dtype=external_cond.dtype, device = external_cond.device)
+                        external_cond = external_cond @ permute_mat
+                    else:
+                        external_cond = rearrange(external_cond, "b (fs c) -> b fs c", c=3)
+                        external_cond = torch.cat([external_cond, torch.zeros_like(external_cond[:, :, :1])], dim=-1)
+                        external_cond = rearrange(external_cond, "b fs c -> b (fs c)")
                 external_cond_emb = self.external_cond_mlp(external_cond.to(self.external_cond_mlp[0].weight.dtype))
-            if (not isinstance(is_reverse, bool)) and is_reverse.any():
-                external_cond_emb = external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)
+            # if (not isinstance(is_reverse, bool)) and is_reverse.any():
+            #     external_cond_emb = external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)
             emb = torch.cat([emb, external_cond_emb], -1)
                 
 
@@ -384,6 +398,7 @@ class TransitionUnet(Unet):
         network_size=32,
         num_gru_layers=1,
         self_condition=False,
+        inv=False,
     ):
         super().__init__(
             network_size,
@@ -392,6 +407,7 @@ class TransitionUnet(Unet):
             external_cond_dim=external_cond_dim,
             z_cond_dim=z_channel,
             self_condition=self_condition,
+            inv=inv,
         )
         self.z_channel = z_channel
         self.x_channel = x_channel

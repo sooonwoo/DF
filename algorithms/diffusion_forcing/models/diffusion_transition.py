@@ -41,6 +41,7 @@ class DiffusionTransitionModel(nn.Module):
         self.self_condition = cfg.self_condition
         self.network_size = cfg.network_size
         self.return_all_timesteps = cfg.return_all_timesteps
+        self.inv = cfg.inv
 
         if self.objective not in ["pred_noise", "pred_x0", "pred_v"]:
             raise ValueError("objective must be either pred_noise or pred_x0 or pred_v ")
@@ -59,6 +60,7 @@ class DiffusionTransitionModel(nn.Module):
                 network_size=self.network_size,
                 num_gru_layers=self.num_gru_layers,
                 self_condition=self.self_condition,
+                inv=self.inv,
             )
 
             self.x_from_z = nn.Sequential(

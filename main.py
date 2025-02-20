@@ -57,6 +57,8 @@ def run_local(cfg: DictConfig):
         
         if "dmlab" in cfg.dataset.save_dir:
             num_action = 3
+            if cfg.algorithm.inv:
+                num_action += 1
         elif "minecraft" in cfg.dataset.save_dir:
             num_action = 4
         else:
