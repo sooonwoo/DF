@@ -15,6 +15,11 @@ include_reverse: False
 select_both_loss: True
 inv: False
 
+optim:
+  optim_scale: 0.1
+  params:
+    - inverse_layer
+
 diffusion:
   objective: pred_v
   use_snr: True

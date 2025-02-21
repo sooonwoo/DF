@@ -56,7 +56,21 @@ class DiffusionForcingBase(BasePytorchAlgo):
             self.init_z = nn.Parameter(torch.randn(list(self.z_shape)), requires_grad=True)
 
     def configure_optimizers(self):
-        transition_params = list(self.transition_model.parameters())
+        # transition_params = list(self.transition_model.parameters())
+        transition_params = []
+        for n, p in self.transition_model.named_parameters():
+            if n in self.cfg.optim.params:
+                transition_params.append({
+                    "params": p,
+                    "lr": self.cfg.lr * self.cfg.optim.optim_scale,
+                    "lr_org": self.cfg.lr * self.cfg.optim.optim_scale,
+                })
+            else:
+                transition_params.append({
+                    "params": p,
+                    "lr": self.cfg.lr,
+                    "lr_org": self.cfg.lr,
+                })
         if self.learnable_init_z:
             transition_params.append(self.init_z)
         optimizer_dynamics = torch.optim.AdamW(
@@ -73,7 +87,8 @@ class DiffusionForcingBase(BasePytorchAlgo):
         if self.trainer.global_step < self.cfg.warmup_steps:
             lr_scale = min(1.0, float(self.trainer.global_step + 1) / self.cfg.warmup_steps)
             for pg in optimizer.param_groups:
-                pg["lr"] = lr_scale * self.cfg.lr
+                # pg["lr"] = lr_scale * self.cfg.lr
+                pg["lr"] = lr_scale * pg["lr_org"]
 
     def _preprocess_batch(self, batch, include_reverse = False):
         xs = batch[0]
