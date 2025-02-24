@@ -11,6 +11,9 @@ from tqdm import trange, tqdm
 import matplotlib.animation as animation
 from pathlib import Path
 
+import os
+from PIL import Image
+
 plt.set_loglevel("warning")
 
 from torchmetrics.functional import mean_squared_error, peak_signal_noise_ratio
@@ -31,6 +34,9 @@ def log_video(
     context_frames=0,
     color=(255, 0, 0),
     logger=None,
+    save_local=False,
+    save_path=None,
+    batch_idx=None,
 ):
     """
     take in video tensors in range [-1, 1] and log into wandb
@@ -62,7 +68,11 @@ def log_video(
     n_samples = len(video)
     # use wandb directly here since pytorch lightning doesn't support logging videos yet
     for i in range(n_samples):
-        logger.log({f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24), f"trainer/global_step": step})
+        if not save_local:
+            logger.log({f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24), f"trainer/global_step": step})
+        else:
+            for n_f in range(video[i].shape[0]):
+                Image.fromarray(video[i]).save(os.path.join(save_path, f"video_{batch_idx*16+i}_{n_f}.png"))
         # path = Path(f"outputs/robot_video/video_{i}")
         # path.mkdir(parents=True, exist_ok=True)
         # for t, f in enumerate(video[i]):

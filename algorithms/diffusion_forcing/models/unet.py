@@ -350,7 +350,7 @@ class Unet(nn.Module):
                     else:
                         external_cond = rearrange(external_cond, "b (fs c) -> b fs c", c=3)
                         external_cond = torch.cat([external_cond, torch.zeros_like(external_cond[:, :, :1])], dim=-1)
-                        external_cond = rearrange(external_cond, "b fs c -> b (fs c)")
+                    external_cond = rearrange(external_cond, "b fs c -> b (fs c)")
                 external_cond_emb = self.external_cond_mlp(external_cond.to(self.external_cond_mlp[0].weight.dtype))
             if not self.inv and (not isinstance(is_reverse, bool)) and is_reverse.any():
                 external_cond_emb = external_cond_emb * (~is_reverse).unsqueeze(1) + self.inverse_layer(external_cond_emb) * is_reverse.unsqueeze(1)

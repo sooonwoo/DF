@@ -17,9 +17,11 @@ from einops import rearrange
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 
 from algorithms.common.base_pytorch_algo import BasePytorchAlgo
-from utils.logging_utils import get_validation_metrics_for_states
+from utils.logging_utils import get_validation_metrics_for_states, log_video
 from .models.diffusion_transition import DiffusionTransitionModel
 
+import hydra
+import os
 
 class DiffusionForcingBase(BasePytorchAlgo):
     def __init__(self, cfg: DictConfig):
@@ -44,6 +46,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
         self.learnable_init_z = cfg.learnable_init_z
         self.include_reverse = cfg.include_reverse
         self.select_both_loss = cfg.select_both_loss
+        self.rev_sample = cfg.rev_sample
 
         super().__init__(cfg)
 
@@ -58,23 +61,27 @@ class DiffusionForcingBase(BasePytorchAlgo):
     def configure_optimizers(self):
         # transition_params = list(self.transition_model.parameters())
         transition_params = []
+        lgp_param = []
+        base_param = []
         for n, p in self.transition_model.named_parameters():
             if n in self.cfg.optim.params:
-                transition_params.append({
-                    "params": p,
-                    "lr": self.cfg.lr * self.cfg.optim.optim_scale,
-                    "lr_org": self.cfg.lr * self.cfg.optim.optim_scale,
-                })
+                lgp_param.append(p)
             else:
-                transition_params.append({
-                    "params": p,
-                    "lr": self.cfg.lr,
-                    "lr_org": self.cfg.lr,
-                })
+                base_param.append(p)
         if self.learnable_init_z:
-            transition_params.append(self.init_z)
+            base_param.append(self.init_z)
+        lgp_group = {
+            "params": lgp_param,
+            "lr": self.cfg.lr * self.cfg.optim.optim_scale,
+            "lr_org": self.cfg.lr * self.cfg.optim.optim_scale,
+        }
+        base_group = {
+            "params": base_param,
+            "lr": self.cfg.lr,
+            "lr_org": self.cfg.lr,
+        }
         optimizer_dynamics = torch.optim.AdamW(
-            transition_params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay, betas=self.cfg.optimizer_beta
+            [lgp_group, base_group], lr=self.cfg.lr, weight_decay=self.cfg.weight_decay, betas=self.cfg.optimizer_beta
         )
 
         return optimizer_dynamics
@@ -108,7 +115,6 @@ class DiffusionForcingBase(BasePytorchAlgo):
             actions = batch[1]
             actions_forward = actions[:, :forward_len - 1]
             actions_reverse = actions[:, :forward_len - 1].flip(1)[:, :reverse_len+1]
-            # batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).double()
             batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).to(actions.dtype)
             t_is_reverse[:, forward_len:] = 1
         t_is_reverse = rearrange(t_is_reverse, "b (t fs) -> t b fs", fs=self.frame_stack)[:, :, 0]
@@ -278,7 +284,6 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 horizon = min(n_frames - len(xs_pred), self.chunk_size)
             else:
                 horizon = n_frames - len(xs_pred)
-
             chunk = [
                 torch.randn((batch_size,) + tuple(self.x_stacked_shape), device=self.device) for _ in range(horizon)
             ]
@@ -347,6 +352,18 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 )
 
         self.validation_step_outputs.append((xs_pred.detach().cpu(), xs.detach().cpu()))
+        log_video(
+            xs_pred,
+            xs,
+            step=None if namespace == "test" else self.global_step,
+            namespace=namespace + "_vis",
+            context_frames=self.context_frames,
+            logger=self.logger.experiment,
+            save_local=True,
+            save_path=os.path.join(hydra.core.hydra_config.HydraConfig.get()["runtime"]["output_dir"], "videos_val"),
+            batch_idx=batch_idx,
+        )
+
 
         return loss
 
