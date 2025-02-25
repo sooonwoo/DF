@@ -65,9 +65,9 @@ class DiffusionForcingBase(BasePytorchAlgo):
         base_param = []
         for n, p in self.transition_model.named_parameters():
             if n in self.cfg.optim.params:
-                lgp_param.append(p)
-            else:
                 base_param.append(p)
+            else:
+                lgp_param.append(p)
         if self.learnable_init_z:
             base_param.append(self.init_z)
         lgp_group = {
@@ -284,9 +284,40 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 horizon = min(n_frames - len(xs_pred), self.chunk_size)
             else:
                 horizon = n_frames - len(xs_pred)
-            chunk = [
-                torch.randn((batch_size,) + tuple(self.x_stacked_shape), device=self.device) for _ in range(horizon)
-            ]
+            if self.rev_sample:
+                assert horizon ==1, f"In rev_sample mode, horizon must be one: horizon: {horizon}, chunk_size: {self.chunk_size}, n_frame: {n_frames}"
+                # xs_pred[-1] 을 reverse 보내면 됨
+                xs_pred_reverse = rearrange(
+                    rearrange(xs_pred[-1], "b (fs c) ... -> b fs c ...", fs=self.frame_stack).flip(1), "b fs c ... -> b (fs c) ..."
+                )
+                # conditions[len(xs_pred)-1] 에서 돌리면 됨
+                conditions_reverse = rearrange(conditions[len(xs_pred)-1], "b (fs d) -> b fs d", fs=self.frame_stack).flip(1)
+                if self.context_frames // self.frame_stack == len(xs_pred):
+                    # 첫 cond
+                    conditions_reverse = torch.cat([conditions_reverse[:, 1:], torch.zeros_like(conditions_reverse[:, :1])], dim=1)
+                else:
+                    conditions_reverse = torch.cat([conditions_reverse[:, 1:], rearrange(conditions[len(xs_pred)-2], "b (fs d) -> b fs d", fs=self.frame_stack)[:, -1:]], dim=1)
+                conditions_reverse = rearrange(conditions_reverse, "b fs d -> b (fs d)")
+                # xs_pred_reverse 만들어진거에서 chunk만들 때 q-sample을 total_step으로 보내보자
+                t_reverse = torch.ones((xs_pred_reverse.size()[0],)).to(xs_pred_reverse.device)
+                # _, x_next_pred_reverse, _, _ = self.transition_model(
+                #     z, xs_pred_reverse, conditions_reverse, deterministic_t=None, is_reverse=t_reverse.bool()
+                # )
+                _, x_next_pred_reverse, _, _ = self.transition_model(
+                    z, xs_pred_reverse, conditions_reverse, deterministic_t=0, is_reverse=t_reverse.bool()
+                )
+                chunk = [
+                    self.transition_model.q_sample(x_next_pred_reverse, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long())
+                ]
+                # chunk = [
+                #     self.transition_model.q_sample(xs_pred_reverse, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long())
+                # ]
+
+                
+            else:
+                chunk = [
+                    torch.randn((batch_size,) + tuple(self.x_stacked_shape), device=self.device) for _ in range(horizon)
+                ]
 
             pyramid_height = self.sampling_timesteps + int(horizon * self.uncertainty_scale)
             pyramid = np.zeros((pyramid_height, horizon), dtype=int)

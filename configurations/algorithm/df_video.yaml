@@ -13,7 +13,7 @@ learnable_init_z: True
 optimizer_beta: [0.9, 0.99]
 include_reverse: False
 select_both_loss: True
-inv: False
+rev_sample: False
 
 optim:
   optim_scale: 0.1
@@ -31,4 +31,5 @@ diffusion:
   beta_schedule: "sigmoid" # cosine for dmlab, sigmoid for minecraft
   cum_snr_decay: 0.8 # 0.8 for dmlab, 0.96 for minecraft
   clip_noise: 6 # helps numerical stablity when using fp16
+  inv: False
   

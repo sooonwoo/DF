@@ -69,10 +69,13 @@ def log_video(
     # use wandb directly here since pytorch lightning doesn't support logging videos yet
     for i in range(n_samples):
         if not save_local:
+            if i == 16:
+                break
             logger.log({f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24), f"trainer/global_step": step})
         else:
+            os.makedirs(save_path, exist_ok=True)
             for n_f in range(video[i].shape[0]):
-                Image.fromarray(video[i]).save(os.path.join(save_path, f"video_{batch_idx*16+i}_{n_f}.png"))
+                Image.fromarray(np.transpose(video[i][n_f], (1, 2, 0)), "RGB").save(os.path.join(save_path, f"video_{batch_idx*16+i}_{n_f}.png"))
         # path = Path(f"outputs/robot_video/video_{i}")
         # path.mkdir(parents=True, exist_ok=True)
         # for t, f in enumerate(video[i]):

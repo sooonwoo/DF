@@ -155,3 +155,4 @@ data/*
 
 *.npz
 *.ipynb
+*.png
