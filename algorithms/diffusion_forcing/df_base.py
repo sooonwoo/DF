@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any
-from einops import rearrange
+from einops import rearrange, repeat
 
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 
@@ -47,6 +47,9 @@ class DiffusionForcingBase(BasePytorchAlgo):
         self.include_reverse = cfg.include_reverse
         self.select_both_loss = cfg.select_both_loss
         self.rev_sample = cfg.rev_sample
+        self.rev_sample_alpha = cfg.rev_sample_alpha
+        self.rev_sample_iter = cfg.rev_sample_iter
+        self.eval_sample = cfg.eval_sample
 
         super().__init__(cfg)
 
@@ -97,7 +100,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 # pg["lr"] = lr_scale * self.cfg.lr
                 pg["lr"] = lr_scale * pg["lr_org"]
 
-    def _preprocess_batch(self, batch, include_reverse = False):
+    def _preprocess_batch(self, batch, include_reverse = False, eval_sample = False):
         xs = batch[0]
         batch_size, n_frames = xs.shape[:2]
         
@@ -118,6 +121,22 @@ class DiffusionForcingBase(BasePytorchAlgo):
             batch[1] = torch.cat([actions_forward, actions_reverse], dim=1).to(actions.dtype)
             t_is_reverse[:, forward_len:] = 1
         t_is_reverse = rearrange(t_is_reverse, "b (t fs) -> t b fs", fs=self.frame_stack)[:, :, 0]
+        if eval_sample:
+            actions = batch[1]
+            actions[:, self.context_frames:, :] = 0
+            seq_len = actions.shape[1] - self.context_frames
+            # assert seq_len % 4 == 0, f"In eval sampling mode, the {seq_len} must be divisible by 4."
+            # actions[:, 
+            #         torch.arange(seq_len) + self.context_frames, 
+            #         ((abs(torch.arange(seq_len) // (seq_len // 4) - 1.5))-0.5).int()
+            #         ] = 1
+            # print(seq_len, torch.arange(seq_len) // 10, actions.shape)
+            actions[:,
+                    torch.arange(seq_len) + self.context_frames, 
+                    (torch.arange(seq_len) // 10) % 3
+                    ] = 1
+            batch[1] = actions
+
         
         if n_frames % self.frame_stack != 0:
             raise ValueError("Number of frames must be divisible by frame stack size")
@@ -170,6 +189,11 @@ class DiffusionForcingBase(BasePytorchAlgo):
             loss = []
             z = init_z
             cum_snr = None
+            if self.transition_model.inv:
+                flag = rearrange(conditions, "t b (fs d) -> b (t fs) d", fs=self.frame_stack).contiguous()
+                flag = torch.argmax(flag, dim=-1) != 3 # b (t fs)
+                flag = repeat(flag, "b (t fs) -> b (t fs) d", d=conditions.shape[-1] // self.frame_stack, fs=self.frame_stack)
+                flag = rearrange(flag, "b (t fs) d-> t b (fs d)", fs=self.frame_stack)
             for t in range(0, n_frames):
                 deterministic_t = None
                 if random() <= self.gt_cond_prob or (t == 0 and random() <= self.gt_first_frame):
@@ -185,6 +209,8 @@ class DiffusionForcingBase(BasePytorchAlgo):
 
             xs_pred = torch.stack(xs_pred)
             loss = torch.stack(loss)
+            if self.transition_model.inv:
+                loss = loss * flag.unsqueeze(-1).unsqueeze(-1)
             x_loss = self.reweigh_loss(loss, masks)
             loss = x_loss
 
@@ -265,7 +291,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
             # repeat batch for crps sum for time series prediction
             batch = [d[None].expand(self.calc_crps_sum, *([-1] * len(d.shape))).flatten(0, 1) for d in batch]
 
-        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch)
+        xs, conditions, masks, *_, init_z, t_is_reverse = self._preprocess_batch(batch, eval_sample = self.eval_sample)
 
         n_frames, batch_size, *_ = xs.shape
         xs_pred = []
@@ -284,7 +310,7 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 horizon = min(n_frames - len(xs_pred), self.chunk_size)
             else:
                 horizon = n_frames - len(xs_pred)
-            if self.rev_sample:
+            if self.rev_sample == "inv":
                 assert horizon ==1, f"In rev_sample mode, horizon must be one: horizon: {horizon}, chunk_size: {self.chunk_size}, n_frame: {n_frames}"
                 # xs_pred[-1] 을 reverse 보내면 됨
                 xs_pred_reverse = rearrange(
@@ -300,21 +326,21 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 conditions_reverse = rearrange(conditions_reverse, "b fs d -> b (fs d)")
                 # xs_pred_reverse 만들어진거에서 chunk만들 때 q-sample을 total_step으로 보내보자
                 t_reverse = torch.ones((xs_pred_reverse.size()[0],)).to(xs_pred_reverse.device)
-                # _, x_next_pred_reverse, _, _ = self.transition_model(
-                #     z, xs_pred_reverse, conditions_reverse, deterministic_t=None, is_reverse=t_reverse.bool()
-                # )
+
                 _, x_next_pred_reverse, _, _ = self.transition_model(
                     z, xs_pred_reverse, conditions_reverse, deterministic_t=0, is_reverse=t_reverse.bool()
                 )
                 chunk = [
-                    self.transition_model.q_sample(x_next_pred_reverse, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long())
+                    self.transition_model.q_sample(x_next_pred_reverse * (1-self.rev_sample_alpha)  + xs_pred_reverse * self.rev_sample_alpha, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long())
                 ]
+                # current CRS baseline
+                # _, x_next_pred_reverse, _, _ = self.transition_model(
+                #     z, xs_pred_reverse, conditions_reverse, deterministic_t=0, is_reverse=t_reverse.bool()
+                # )
                 # chunk = [
                 #     self.transition_model.q_sample(xs_pred_reverse, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long())
                 # ]
-
-                
-            else:
+            elif self.rev_sample in ["base", "iter"]:
                 chunk = [
                     torch.randn((batch_size,) + tuple(self.x_stacked_shape), device=self.device) for _ in range(horizon)
                 ]
@@ -333,7 +359,6 @@ class DiffusionForcingBase(BasePytorchAlgo):
                 z_chunk = z.detach()
                 for t in range(horizon):
                     i = min(pyramid[m, t], self.sampling_timesteps - 1)
-
                     chunk[t], z_chunk = self.transition_model.ddim_sample_step(
                         chunk[t], z_chunk, conditions[len(xs_pred) + t], i
                     )
@@ -345,7 +370,21 @@ class DiffusionForcingBase(BasePytorchAlgo):
                     # last z_chunk and noiser chunk[t]. This saves half of the compute from posterior steps. 
                     # The effect of the above simplification already contains stablization: we always stablize 
                     # (ddim_sample_step is never called with noise level k=0 above)
+            if self.rev_sample == "iter":
+                for _ in range(self.rev_sample_iter-1):
+                    chunk = [
+                        self.transition_model.q_sample(chunk_, torch.full((batch_size,), self.transition_model.num_timesteps-1, device=z.device).long()) for chunk_ in chunk
+                    ]
+                    for m in range(pyramid_height):
+                        if self.transition_model.return_all_timesteps:
+                            xs_pred_all.append(chunk)
 
+                        z_chunk = z.detach()
+                        for t in range(horizon):
+                            i = min(pyramid[m, t], self.sampling_timesteps - 1)
+                            chunk[t], z_chunk = self.transition_model.ddim_sample_step(
+                                chunk[t], z_chunk, conditions[len(xs_pred) + t], i
+                            )
             z = z_chunk
             xs_pred += chunk
 

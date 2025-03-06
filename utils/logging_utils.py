@@ -69,7 +69,7 @@ def log_video(
     # use wandb directly here since pytorch lightning doesn't support logging videos yet
     for i in range(n_samples):
         if not save_local:
-            if i == 16:
+            if i == 16 * 5:
                 break
             logger.log({f"{namespace}/{prefix}_{i}": wandb.Video(video[i], fps=24), f"trainer/global_step": step})
         else:

@@ -11,9 +11,12 @@ compute_fid_lpips: False
 uncertainty_scale: 1
 learnable_init_z: True
 optimizer_beta: [0.9, 0.99]
-include_reverse: False
-select_both_loss: True
-rev_sample: False
+include_reverse: False # make batch including reverse
+select_both_loss: True # both loss or random
+rev_sample: base # refine sampling: base | inv | iter
+rev_sample_alpha: 0.5 # 1.0: gt | 0.0: ohat | 0~1: both
+rev_sample_iter: 2
+eval_sample: False # make batch for evaluation framework
 
 optim:
   optim_scale: 0.1
@@ -31,5 +34,5 @@ diffusion:
   beta_schedule: "sigmoid" # cosine for dmlab, sigmoid for minecraft
   cum_snr_decay: 0.8 # 0.8 for dmlab, 0.96 for minecraft
   clip_noise: 6 # helps numerical stablity when using fp16
-  inv: False
+  inv: False # only for data aug
   
